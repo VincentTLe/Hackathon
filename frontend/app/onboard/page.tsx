@@ -7,15 +7,21 @@ import { api, setFounderToken } from '../lib/api'
 const QUESTIONS = [
   'When you want to say something hard to them, what usually stops you?',
   "What do you wish they understood about you that they don't seem to?",
-  'When they respond in a way that shuts you down — what does that look like?',
   'What emotional response do you hope for from them?',
-  'What is one thing you have never been able to say?',
+]
+
+const DEMO_ANSWERS = [
+  "I'm scared she'll take it as an attack and shut down. Every time I've tried, the conversation spirals and I end up apologizing for bringing it up.",
+  "That I'm not criticizing her — I'm asking for closeness. When I say something hurt me, I need her to hear it as me trusting her, not accusing her.",
+  "I want her to pause before reacting. Just acknowledge that what I felt was real, even if she sees it differently. That alone would change everything.",
 ]
 
 export default function OnboardPage() {
   const router = useRouter()
-  const [name, setName] = useState('')
-  const [answers, setAnswers] = useState<string[]>(['', '', '', '', ''])
+  const [name, setName] = useState('Linh')
+  const [theirName, setTheirName] = useState('Trang')
+  const [relationship, setRelationship] = useState('mother')
+  const [answers, setAnswers] = useState<string[]>([...DEMO_ANSWERS])
   const [loading, setLoading] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -25,6 +31,11 @@ export default function OnboardPage() {
     try {
       const res = await api.onboardFounder(name, answers.filter(Boolean))
       setFounderToken(res.founder_token)
+      try {
+        await api.createConnection(theirName, relationship, '')
+      } catch (e: any) {
+        setErr(e.message)
+      }
       router.push('/connections')
     } catch (e: any) {
       setErr(e.message)
@@ -41,6 +52,22 @@ export default function OnboardPage() {
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
+          className="w-full mt-1 p-3 border border-[#8b7355] rounded bg-white"
+        />
+      </label>
+      <label className="block mb-4">
+        <span className="text-sm">Their name</span>
+        <input
+          value={theirName}
+          onChange={(e) => setTheirName(e.target.value)}
+          className="w-full mt-1 p-3 border border-[#8b7355] rounded bg-white"
+        />
+      </label>
+      <label className="block mb-4">
+        <span className="text-sm">Relationship</span>
+        <input
+          value={relationship}
+          onChange={(e) => setRelationship(e.target.value)}
           className="w-full mt-1 p-3 border border-[#8b7355] rounded bg-white"
         />
       </label>
