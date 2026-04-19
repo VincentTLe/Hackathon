@@ -394,19 +394,30 @@ class DataManager:
     # ------------------------------------------------------------------
 
     def load_macro(self, csv_path: str = NCUA_CSV_PATH) -> None:
-        """Load NCUA rates into memory and persist to DuckDB."""
+        """Load NCUA rates into memory; persist to DuckDB only when writable."""
+        # Try loading from parquet snapshot first (read-only mode)
+        macro_parquet = Path(__file__).parent.parent / "data" / "macro_data.parquet"
+        if macro_parquet.exists():
+            df = pd.read_parquet(macro_parquet)
+            df["period_date"] = pd.to_datetime(df["period_date"])
+            self._macro_df = df
+            logger.info("Loaded %d NCUA macro rows from parquet", len(df))
+            return
+
         df = fetch_ncua_rates(csv_path)
         self._macro_df = df
-
-        self.con.execute("DELETE FROM macro_data")
-        self.con.execute("""
-            INSERT INTO macro_data
-            SELECT
-                period_date::DATE,
-                ncua_cc_rate,
-                rate_mom_delta
-            FROM df
-        """)
+        try:
+            self.con.execute("DELETE FROM macro_data")
+            self.con.execute("""
+                INSERT INTO macro_data
+                SELECT
+                    period_date::DATE,
+                    ncua_cc_rate,
+                    rate_mom_delta
+                FROM df
+            """)
+        except Exception:
+            pass
         logger.info("Loaded %d NCUA macro rows", len(df))
 
     def get_macro_df(self) -> pd.DataFrame:

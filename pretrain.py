@@ -127,10 +127,13 @@ def build_cliques(dm: DataManager, tx_df: pd.DataFrame) -> dict[str, list[list[s
                             cliques_by_account[acct].append(named)
                         total_cliques += 1
 
-        # --- Strategy B: shared-destination grouping (smurfing pattern) ---
-        # Cap ring size: a merchant with 500 senders is popular, not a fraud ring
-        c_txs = win_df[win_df["account_from"].str.startswith("C")]
-        for dest, grp in c_txs.groupby("account_to"):
+        # --- Strategy B: shared-destination smurfing (C→C only) ---
+        # Only consider customer-to-customer flows; C→M is retail spending, not smurfing
+        c_to_c = win_df[
+            win_df["account_from"].str.startswith("C") &
+            win_df["account_to"].str.startswith("C")
+        ]
+        for dest, grp in c_to_c.groupby("account_to"):
             sources = list(grp["account_from"].unique())
             if 2 <= len(sources) <= MAX_RING_SIZE:
                 ring = sources + [dest]
@@ -243,9 +246,8 @@ def main() -> None:
     log.info("Training on %d accounts (%d fraud, %d normal)",
              len(train_accounts), n_fraud, len(normal_sample))
 
-    # Precompute fraud set (avoids per-account DataFrame scan)
-    fraud_set = set(tx_df.loc[tx_df["is_fraud"], "account_from"].unique()) | \
-                set(tx_df.loc[tx_df["is_fraud"], "account_to"].unique())
+    # Only the *initiating* sender is the fraudster — receivers are often innocent merchants
+    fraud_set = set(tx_df.loc[tx_df["is_fraud"], "account_from"].unique())
 
     log.info("  Batch-fetching features for %d accounts…", len(train_accounts))
     bundles = dm.build_node_features_batch(train_accounts)
@@ -293,9 +295,15 @@ def main() -> None:
     # ------------------------------------------------------------------
     log.info("=== Step 5/5: Scoring accounts ===")
 
-    # Score a broader set than just training accounts
-    score_candidates = list(dict.fromkeys(fraud_accounts + clique_accounts + all_accounts))
-    score_accounts = score_candidates[:SCORE_ACCTS]
+    # Score a balanced mix: all fraud + random sample of normal accounts
+    np.random.seed(123)
+    normal_pool = [a for a in all_accounts if a not in fraud_set]
+    np.random.shuffle(normal_pool)
+    n_score_fraud = min(len(fraud_accounts), SCORE_ACCTS // 3)
+    n_score_normal = SCORE_ACCTS - n_score_fraud
+    score_accounts = list(np.random.choice(fraud_accounts, n_score_fraud, replace=False)) + \
+                     normal_pool[:n_score_normal]
+    np.random.shuffle(score_accounts)
     log.info("Scoring %d accounts…", len(score_accounts))
 
     # Batch feature fetch for scoring (2 queries instead of 20 000+)

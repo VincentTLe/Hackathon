@@ -283,14 +283,14 @@ def render_macro_overlay(monthly_df: pd.DataFrame) -> None:
         yaxis={
             "title": "Transaction Count",
             "gridcolor": "#2a2d35",
-            "titlefont": {"color": BLUE_ACCENT},
+            "title_font": {"color": BLUE_ACCENT},
             "tickfont": {"color": BLUE_ACCENT},
         },
         yaxis2={
             "title": "NCUA CC Rate (%)",
             "overlaying": "y",
             "side": "right",
-            "titlefont": {"color": RED},
+            "title_font": {"color": RED},
             "tickfont": {"color": RED},
             "gridcolor": "rgba(0,0,0,0)",
         },
