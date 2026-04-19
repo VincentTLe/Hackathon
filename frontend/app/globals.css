@@ -1,3 +1,123 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body {
+    background:
+      radial-gradient(1200px 800px at 10% -10%, #f4ecdc 0%, transparent 60%),
+      radial-gradient(900px 600px at 110% 10%, #e9dbbd 0%, transparent 55%),
+      #faf6ee;
+    background-attachment: fixed;
+    color: #3b2d1b;
+  }
+}
+
+@layer components {
+  /* Mouse-reactive "shader" card. Tracks --mx/--my from JS and paints
+     a soft highlight that follows the cursor. */
+  .shader-card {
+    position: relative;
+    isolation: isolate;
+    transition: transform 220ms ease, box-shadow 280ms ease, border-color 280ms ease;
+    box-shadow:
+      0 1px 2px rgba(87, 67, 39, 0.06),
+      0 8px 24px -12px rgba(87, 67, 39, 0.18);
+  }
+  .shader-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 0;
+    background:
+      radial-gradient(
+        240px 240px at var(--mx, 50%) var(--my, 50%),
+        rgba(200, 169, 106, 0.28) 0%,
+        rgba(200, 169, 106, 0.10) 35%,
+        transparent 70%
+      );
+    opacity: var(--shader-opacity, 0);
+    transition: opacity 240ms ease;
+    mix-blend-mode: multiply;
+  }
+  .shader-card::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    z-index: 0;
+    padding: 1px;
+    background: linear-gradient(
+      135deg,
+      rgba(200, 169, 106, 0.0) 0%,
+      rgba(200, 169, 106, 0.55) 50%,
+      rgba(200, 169, 106, 0.0) 100%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+    opacity: var(--shader-opacity, 0);
+    transition: opacity 240ms ease;
+  }
+  .shader-card:hover {
+    transform: translateY(-1px);
+    box-shadow:
+      0 2px 4px rgba(87, 67, 39, 0.08),
+      0 18px 36px -14px rgba(87, 67, 39, 0.28);
+    border-color: #d9c396;
+  }
+  .shader-card > * { position: relative; z-index: 1; }
+
+  /* Tan-tinted textareas/inputs with a subtle inner glow on focus. */
+  .tan-input {
+    background: linear-gradient(180deg, #fffdf7 0%, #faf6ee 100%);
+    border: 2px solid #d9c396;
+    color: #3b2d1b;
+    transition: border-color 180ms ease, box-shadow 220ms ease, background 220ms ease;
+  }
+  .tan-input::placeholder { color: #a8956f; }
+  .tan-input:hover { border-color: #d9c396; }
+  .tan-input:focus {
+    outline: none;
+    border-color: #c8a96a;
+    box-shadow:
+      0 0 0 3px rgba(200, 169, 106, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    background: #fffdf7;
+  }
+
+  /* Primary button: warm brown, subtle sheen on hover. */
+  .btn-primary {
+    background: linear-gradient(180deg, #755a2e 0%, #574327 100%);
+    color: #faf6ee;
+    border: 2px solid #3b2d1b;
+    text-transform: capitalize;
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.10) inset,
+      0 8px 20px -10px rgba(87, 67, 39, 0.55);
+    transition: transform 160ms ease, box-shadow 220ms ease, filter 220ms ease;
+  }
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.12) inset,
+      0 14px 28px -12px rgba(87, 67, 39, 0.65);
+  }
+  .btn-primary:active:not(:disabled) { transform: translateY(0); }
+  .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+  .btn-ghost {
+    background: transparent;
+    border: 2px solid #c8a96a;
+    color: #755a2e;
+    text-transform: capitalize;
+    transition: background 180ms ease, border-color 180ms ease;
+  }
+  .btn-ghost:hover { background: #f4ecdc; border-color: #c8a96a; }
+}

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
@@ -109,58 +109,55 @@ export default function Home() {
   const themLabel = receiverName || 'Them'
 
   return (
-    <main className="min-h-screen bg-stone-50 flex flex-col items-center p-6 md:p-12">
+    <main className="min-h-screen flex flex-col items-center p-6 md:p-12">
       <div className="w-full max-w-2xl space-y-6">
         <header className="text-center space-y-1">
-          <h1 className="text-3xl font-semibold text-stone-800">Bridge</h1>
-          <p className="text-stone-500 text-sm italic">They love you. Just not in your language.</p>
+          <h1 className="text-4xl font-semibold text-tan-900 tracking-tight">Bridge</h1>
+          <p className="text-tan-700 text-sm italic">They love you. Just not in your language.</p>
         </header>
 
         {step === 'intro' && (
-          <section className="space-y-5 bg-white rounded-2xl p-8 border border-stone-200">
-            <p className="text-stone-700 leading-relaxed">
+          <ShaderCard className="rounded-2xl p-8 border-2 border-tan-300 bg-tan-50/80 backdrop-blur-sm space-y-5">
+            <p className="text-tan-900 leading-relaxed">
               Bridge translates a message between two people who love each other but struggle to reach each other.
               Try it with a real conversation you&apos;ve been putting off.
             </p>
 
             <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-stone-600 mb-1">Your name</label>
+              <Field label="Your name">
                 <input
-                  className="w-full p-3 border border-stone-200 rounded-lg bg-stone-50 text-stone-800 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  className="w-full p-3 rounded-lg text-sm tan-input"
                   placeholder="e.g. Alex"
                   value={senderName}
                   onChange={e => setSenderName(e.target.value)}
                 />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-600 mb-1">Their name</label>
+              </Field>
+              <Field label="Their name">
                 <input
-                  className="w-full p-3 border border-stone-200 rounded-lg bg-stone-50 text-stone-800 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  className="w-full p-3 rounded-lg text-sm tan-input"
                   placeholder="e.g. Mom"
                   value={receiverName}
                   onChange={e => setReceiverName(e.target.value)}
                 />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-stone-600 mb-1">Relationship</label>
+              </Field>
+              <Field label="Relationship">
                 <input
-                  className="w-full p-3 border border-stone-200 rounded-lg bg-stone-50 text-stone-800 text-sm focus:outline-none focus:ring-2 focus:ring-amber-200"
+                  className="w-full p-3 rounded-lg text-sm tan-input"
                   placeholder="e.g. mother, partner, best friend, dad"
                   value={relationship}
                   onChange={e => setRelationship(e.target.value)}
                 />
-              </div>
+              </Field>
             </div>
 
             <button
               onClick={() => setStep('onboardA')}
               disabled={!senderName.trim() || !receiverName.trim()}
-              className="w-full py-3 bg-stone-800 text-white rounded-xl font-medium disabled:opacity-40 hover:bg-stone-700"
+              className="w-full py-3 rounded-xl font-medium btn-primary"
             >
               Start
             </button>
-          </section>
+          </ShaderCard>
         )}
 
         {step === 'onboardA' && (
@@ -190,23 +187,29 @@ export default function Home() {
         {step === 'composeA' && (
           <section className="space-y-4">
             <Badge>{youLabel} → {themLabel}{relationship && ` · ${relationship}`}</Badge>
-            <label className="block text-sm text-stone-600">
-              Write what you actually want to say. Don&apos;t worry about how it lands.
-            </label>
-            <textarea
-              className="w-full h-48 p-4 border border-stone-200 rounded-xl bg-white text-stone-800 resize-none focus:outline-none focus:ring-2 focus:ring-amber-200"
-              placeholder="I've been feeling distant lately and I don't know how to say it…"
-              value={rawA}
-              onChange={e => setRawA(e.target.value)}
-            />
-            {error && <p className="text-red-500 text-sm">{error}</p>}
-            <button
-              onClick={handleTranslateAtoB}
-              disabled={!rawA.trim() || loading}
-              className="w-full py-3 bg-stone-800 text-white rounded-xl font-medium disabled:opacity-40 hover:bg-stone-700"
-            >
-              {loading ? 'Bridge is translating…' : 'Send through Bridge →'}
-            </button>
+            <ShaderCard className="rounded-2xl p-5 border-2 border-tan-300 bg-tan-50/80 backdrop-blur-sm space-y-3">
+              <label className="block text-sm text-tan-700">
+                Write what you actually want to say. Don&apos;t worry about how it lands.
+              </label>
+              <textarea
+                className="w-full h-48 p-4 rounded-xl resize-none tan-input"
+                placeholder="I've been feeling distant lately and I don't know how to say it…"
+                value={rawA}
+                onChange={e => setRawA(e.target.value)}
+                data-gramm="false"
+                data-gramm_editor="false"
+                data-enable-grammarly="false"
+                spellCheck={false}
+              />
+              {error && <p className="text-red-600 text-sm">{error}</p>}
+              <button
+                onClick={handleTranslateAtoB}
+                disabled={!rawA.trim() || loading}
+                className="w-full py-3 rounded-xl font-medium btn-primary"
+              >
+                {loading ? 'Bridge is translating…' : 'Send through Bridge →'}
+              </button>
+            </ShaderCard>
           </section>
         )}
 
@@ -216,7 +219,7 @@ export default function Home() {
             <TranslationView t={translationAtoB} />
             <button
               onClick={() => setStep('replyB')}
-              className="w-full py-3 bg-stone-800 text-white rounded-xl font-medium hover:bg-stone-700"
+              className="w-full py-3 rounded-xl font-medium btn-primary"
             >
               Reply as {themLabel} →
             </button>
@@ -226,23 +229,29 @@ export default function Home() {
         {step === 'replyB' && (
           <section className="space-y-4">
             <Badge>{themLabel} → {youLabel}</Badge>
-            <label className="block text-sm text-stone-600">
-              Write {themLabel}&apos;s reply in their own words.
-            </label>
-            <textarea
-              className="w-full h-40 p-4 border border-stone-200 rounded-xl bg-white text-stone-800 resize-none focus:outline-none focus:ring-2 focus:ring-amber-200"
-              placeholder="I just want you to be okay…"
-              value={rawB}
-              onChange={e => setRawB(e.target.value)}
-            />
-            {error && <p className="text-red-500 text-sm">{error}</p>}
-            <button
-              onClick={handleTranslateBtoA}
-              disabled={!rawB.trim() || loading}
-              className="w-full py-3 bg-stone-800 text-white rounded-xl font-medium disabled:opacity-40 hover:bg-stone-700"
-            >
-              {loading ? 'Bridge is translating…' : 'Send through Bridge →'}
-            </button>
+            <ShaderCard className="rounded-2xl p-5 border-2 border-tan-300 bg-tan-50/80 backdrop-blur-sm space-y-3">
+              <label className="block text-sm text-tan-700">
+                Write {themLabel}&apos;s reply in their own words.
+              </label>
+              <textarea
+                className="w-full h-40 p-4 rounded-xl resize-none tan-input"
+                placeholder="I just want you to be okay…"
+                value={rawB}
+                onChange={e => setRawB(e.target.value)}
+                data-gramm="false"
+                data-gramm_editor="false"
+                data-enable-grammarly="false"
+                spellCheck={false}
+              />
+              {error && <p className="text-red-600 text-sm">{error}</p>}
+              <button
+                onClick={handleTranslateBtoA}
+                disabled={!rawB.trim() || loading}
+                className="w-full py-3 rounded-xl font-medium btn-primary"
+              >
+                {loading ? 'Bridge is translating…' : 'Send through Bridge →'}
+              </button>
+            </ShaderCard>
           </section>
         )}
 
@@ -252,7 +261,7 @@ export default function Home() {
             <TranslationView t={translationBtoA} />
             <button
               onClick={resetAll}
-              className="w-full py-3 border border-stone-300 text-stone-600 rounded-xl font-medium hover:bg-stone-50"
+              className="w-full py-3 rounded-xl font-medium btn-ghost"
             >
               Start a new conversation
             </button>
@@ -263,9 +272,56 @@ export default function Home() {
   )
 }
 
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-xs font-medium text-tan-700 mb-1">{label}</label>
+      {children}
+    </div>
+  )
+}
+
 function Badge({ children }: { children: React.ReactNode }) {
   return (
-    <div className="inline-block text-xs font-medium text-stone-500 uppercase tracking-wide bg-stone-100 rounded-full px-3 py-1">
+    <div className="inline-block text-xs font-medium text-tan-700 uppercase tracking-wide bg-tan-100 border-2 border-tan-300 rounded-full px-3 py-1">
+      {children}
+    </div>
+  )
+}
+
+function ShaderCard({
+  className = '',
+  children,
+}: {
+  className?: string
+  children: React.ReactNode
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+
+  function onMove(e: React.MouseEvent<HTMLDivElement>) {
+    const el = ref.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const x = ((e.clientX - rect.left) / rect.width) * 100
+    const y = ((e.clientY - rect.top) / rect.height) * 100
+    el.style.setProperty('--mx', `${x}%`)
+    el.style.setProperty('--my', `${y}%`)
+  }
+  function onEnter() {
+    ref.current?.style.setProperty('--shader-opacity', '1')
+  }
+  function onLeave() {
+    ref.current?.style.setProperty('--shader-opacity', '0')
+  }
+
+  return (
+    <div
+      ref={ref}
+      onMouseMove={onMove}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
+      className={`shader-card ${className}`}
+    >
       {children}
     </div>
   )
@@ -279,60 +335,64 @@ function OnboardingPanel({
 }) {
   const canAdvance = answers.some(a => a.trim().length > 0)
   return (
-    <section className="space-y-5 bg-white rounded-2xl p-6 border border-stone-200">
+    <ShaderCard className="rounded-2xl p-6 border-2 border-tan-300 bg-tan-50/80 backdrop-blur-sm space-y-5">
       <div>
-        <h2 className="text-lg font-semibold text-stone-800">{title}</h2>
-        <p className="text-sm text-stone-500">{subtitle}</p>
+        <h2 className="text-lg font-semibold text-tan-900">{title}</h2>
+        <p className="text-sm text-tan-700">{subtitle}</p>
       </div>
       {questions.map((q, i) => (
         <div key={i} className="space-y-2">
-          <label className="block text-sm text-stone-700">{q}</label>
+          <label className="block text-sm text-tan-800">{q}</label>
           <textarea
-            className="w-full h-20 p-3 border border-stone-200 rounded-lg bg-stone-50 text-stone-800 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-amber-200"
+            className="w-full h-20 p-3 rounded-lg text-sm resize-none tan-input"
             value={answers[i]}
             onChange={e => {
               const next = [...answers]; next[i] = e.target.value; onChange(next)
             }}
+            data-gramm="false"
+            data-gramm_editor="false"
+            data-enable-grammarly="false"
+            spellCheck={false}
           />
         </div>
       ))}
       <button
         onClick={onNext}
         disabled={!canAdvance}
-        className="w-full py-3 bg-stone-800 text-white rounded-xl font-medium disabled:opacity-40 hover:bg-stone-700"
+        className="w-full py-3 rounded-xl font-medium btn-primary"
       >
         {nextLabel}
       </button>
-    </section>
+    </ShaderCard>
   )
 }
 
 function TranslationView({ t }: { t: Translation }) {
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-stone-200 rounded-2xl p-5 space-y-2">
-        <p className="text-xs text-stone-400 uppercase tracking-wide">Translator agent</p>
-        <p className="text-stone-800 leading-relaxed whitespace-pre-wrap">{t.translated_content}</p>
-        <p className="text-xs text-stone-400 pt-2">Translated by Bridge · 3-agent pipeline</p>
-      </div>
+      <ShaderCard className="rounded-2xl p-5 border-2 border-tan-300 bg-tan-50/80 backdrop-blur-sm space-y-2">
+        <p className="text-xs text-tan-600 uppercase tracking-wide">Translator agent</p>
+        <p className="text-tan-900 leading-relaxed whitespace-pre-wrap">{t.translated_content}</p>
+        <p className="text-xs text-tan-600 pt-2">Translated by Bridge · 3-agent pipeline</p>
+      </ShaderCard>
 
-      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 space-y-4">
-        <p className="text-xs font-medium text-amber-800 uppercase tracking-wide">
+      <ShaderCard className="rounded-2xl p-5 border-2 border-tan-400 bg-tan-100/80 backdrop-blur-sm space-y-4">
+        <p className="text-xs font-medium text-tan-800 uppercase tracking-wide">
           Bridge sent two more notes so you understand the full picture
         </p>
         <div>
-          <p className="text-xs font-medium text-amber-800 uppercase tracking-wide mb-1">
+          <p className="text-xs font-medium text-tan-800 uppercase tracking-wide mb-1">
             Emotion agent · what they really meant
           </p>
-          <p className="text-stone-700 text-sm leading-relaxed">{t.emotional_interpretation}</p>
+          <p className="text-tan-900 text-sm leading-relaxed">{t.emotional_interpretation}</p>
         </div>
         <div>
-          <p className="text-xs font-medium text-amber-800 uppercase tracking-wide mb-1">
+          <p className="text-xs font-medium text-tan-800 uppercase tracking-wide mb-1">
             Context agent · why this happens between you two
           </p>
-          <p className="text-stone-700 text-sm leading-relaxed">{t.educational_context}</p>
+          <p className="text-tan-900 text-sm leading-relaxed">{t.educational_context}</p>
         </div>
-      </div>
+      </ShaderCard>
     </div>
   )
 }
