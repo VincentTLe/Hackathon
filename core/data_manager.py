@@ -437,8 +437,9 @@ class DataManager:
             macro_df = self.get_macro_df()
 
         tx_sorted = tx_df.sort_values("timestamp").copy()
+        tx_sorted["timestamp"] = tx_sorted["timestamp"].astype("datetime64[us]")
         macro_sorted = macro_df.sort_values("period_date").copy()
-        macro_sorted["timestamp_key"] = pd.to_datetime(macro_sorted["period_date"])
+        macro_sorted["timestamp_key"] = pd.to_datetime(macro_sorted["period_date"]).astype("datetime64[us]")
 
         fused = pd.merge_asof(
             tx_sorted,
@@ -975,7 +976,8 @@ class DataManager:
         """, [account_id, account_id]).df()
 
         macro_df = self.get_macro_df()
-        macro_df["month"] = macro_df["period_date"].dt.to_period("M").dt.to_timestamp()
+        macro_df["month"] = macro_df["period_date"].dt.to_period("M").dt.to_timestamp().astype("datetime64[us]")
+        df["month"] = df["month"].astype("datetime64[us]")
 
         merged = pd.merge_asof(
             df.sort_values("month"),

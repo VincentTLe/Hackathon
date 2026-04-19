@@ -119,6 +119,29 @@ st.markdown("""
     .stCaption, caption { color: #8b949e !important; }
     footer { visibility: hidden; }
     #MainMenu { visibility: hidden; }
+
+    /* Hide Streamlit's native running spinner + stop button from top-right */
+    [data-testid="stStatusWidget"] { display: none !important; }
+
+    /* Demo button — distinct teal/green style */
+    div[data-testid="stButton"].demo-btn > button {
+        background: linear-gradient(135deg, #00c853, #00897b) !important;
+        font-size: 0.95rem;
+    }
+
+    /* Training status box */
+    .train-status {
+        background: #12202f;
+        border: 1px solid #1565c0;
+        border-radius: 8px;
+        padding: 12px 18px;
+        margin: 8px 0;
+        font-size: 0.95rem;
+        color: #e0e0e0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -166,6 +189,8 @@ dm, pipeline, model_trained = load_resources()
 
 if "active_account" not in st.session_state:
     st.session_state.active_account = None
+if "demo_mode" not in st.session_state:
+    st.session_state.demo_mode = False
 
 # ---------------------------------------------------------------------------
 # Header
@@ -200,6 +225,27 @@ def _count_transactions() -> int:
         return 0
 
 
+def _status(status_text, progress_bar, step: int, msg: str, pct: int, t0: float) -> None:
+    """Render the cycling-indicator status line with time estimate."""
+    progress_bar.progress(pct)
+    elapsed = time.time() - t0
+    if pct >= 10:
+        estimated_total = elapsed / (pct / 100)
+        remaining       = max(0, estimated_total - elapsed)
+        mins = int(remaining // 60)
+        secs = int(remaining % 60)
+        time_str = f"~{mins}m {secs}s remaining" if mins > 0 else f"~{secs}s remaining"
+    else:
+        time_str = "estimating time…"
+    status_text.markdown(
+        f"""<div class="train-status">
+            🔄 &nbsp;<b>Step {step}/5</b> — {msg}
+            &nbsp;&nbsp;&nbsp;⏱ <span style="color:#8b949e;">{time_str}</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
 def _run_training_pipeline(tx_df: pd.DataFrame, progress_bar, status_text) -> dict:
     """Full inline training pipeline. Logs 80/20 test metrics to console only."""
     import json as _json
@@ -209,22 +255,22 @@ def _run_training_pipeline(tx_df: pd.DataFrame, progress_bar, status_text) -> di
     # Normalise column names (PaySim uses nameOrig/nameDest/isFraud etc.)
     tx_df = _normalize_tx_df(tx_df)
 
-    TRAIN_ACCTS  = 2_000   # reduced: batch queries make this much cheaper
+    TRAIN_ACCTS  = 2_000
     SCORE_ACCTS  = 6_000
     EPOCHS       = 20
     WINDOW_HOURS = 24
 
+    t0 = time.time()
+
     # Step 1 — Ingest
-    status_text.text("Step 1/5 — Ingesting dataset into DuckDB…")
-    progress_bar.progress(5)
+    _status(status_text, progress_bar, 1, "Ingesting dataset into DuckDB…", 3, t0)
 
     dm_w = DataManager()
     dm_w.ingest_uploaded_csv(tx_df)
     dm_w.load_macro()
 
-    # Step 2 — Cliques (vectorised — no iterrows)
-    status_text.text("Step 2/5 — Detecting fraud-ring cliques…")
-    progress_bar.progress(15)
+    # Step 2 — Cliques
+    _status(status_text, progress_bar, 2, "Detecting fraud-ring cliques…", 12, t0)
 
     try:
         import clique_engine as ce
@@ -287,7 +333,7 @@ def _run_training_pipeline(tx_df: pd.DataFrame, progress_bar, status_text) -> di
         c_txs = win_df[win_df["account_from"].str.startswith("C", na=False)]
         for dest, grp in c_txs.groupby("account_to"):
             sources = list(grp["account_from"].unique())
-            if len(sources) >= 2:
+            if 2 <= len(sources) <= 20:   # cap: popular merchants aren't fraud rings
                 ring = sources + [dest]
                 for a in ring:
                     cliques_by_account.setdefault(a, []).append(ring)
@@ -302,9 +348,8 @@ def _run_training_pipeline(tx_df: pd.DataFrame, progress_bar, status_text) -> di
                  _json.dumps(c), len(c)) for i, c in enumerate(all_cliques)]
         dm_w.con.executemany("INSERT INTO cliques VALUES (?, ?, ?, ?, ?)", rows)
 
-    # Step 3 — Features (batch: 2 SQL queries instead of 4 000+)
-    status_text.text("Step 3/5 — Building account feature matrices (batch)…")
-    progress_bar.progress(35)
+    # Step 3 — Features
+    _status(status_text, progress_bar, 3, "Building account feature matrices…", 40, t0)
 
     fraud_accounts  = list(raw[raw["is_fraud"]]["account_from"].unique()) if "is_fraud" in raw.columns else []
     clique_accounts = list(cliques_by_account.keys())
@@ -341,8 +386,7 @@ def _run_training_pipeline(tx_df: pd.DataFrame, progress_bar, status_text) -> di
     flat_cliques  = [c for cs in [cliques_by_account.get(a, []) for a in train_accounts] for c in cs]
 
     # Step 4 — Train
-    status_text.text(f"Step 4/5 — Training FLHR-MCL ({EPOCHS} epochs)…")
-    progress_bar.progress(50)
+    _status(status_text, progress_bar, 4, f"Training FLHR-MCL ({EPOCHS} epochs)…", 58, t0)
 
     model_pipeline = AMLPipeline(device="cpu", epochs=EPOCHS, hidden_dim=64, lr=0.1)
     metrics = model_pipeline.fit(
@@ -355,9 +399,8 @@ def _run_training_pipeline(tx_df: pd.DataFrame, progress_bar, status_text) -> di
         labels=labels_arr,
     )
 
-    # Step 5 — Score (batch: 2 SQL queries instead of 20 000+)
-    status_text.text("Step 5/5 — Scoring all accounts (batch)…")
-    progress_bar.progress(80)
+    # Step 5 — Score
+    _status(status_text, progress_bar, 5, "Scoring all accounts…", 78, t0)
 
     score_candidates = list(dict.fromkeys(fraud_accounts + clique_accounts + remaining))
     score_accts      = score_candidates[:SCORE_ACCTS]
@@ -403,26 +446,45 @@ def _run_training_pipeline(tx_df: pd.DataFrame, progress_bar, status_text) -> di
 
     dm_w.close()
     progress_bar.progress(100)
-    status_text.text("Done!")
+    elapsed_total = time.time() - t0
+    status_text.markdown(
+        f"""<div class="train-status" style="border-color:#00c853;">
+            ✅ &nbsp;<b>Complete</b> — model trained and scored in
+            <b>{elapsed_total/60:.1f} min</b>. Check terminal for accuracy metrics.
+        </div>""",
+        unsafe_allow_html=True,
+    )
     return metrics
 
 
 n_tx = _count_transactions()
+demo_ready = model_trained  # pretrained artifacts exist
 
-if n_tx > 0 and model_trained:
-    # Dataset already loaded — compact status strip + expander to retrain
+# ---- Handle "Use Demo" click ----
+if st.session_state.demo_mode and not demo_ready:
+    st.session_state.demo_mode = False  # artifacts gone, reset
+    st.warning("No pretrained model found. Please upload a CSV and click Analyze.", icon="⚠️")
+
+if (n_tx > 0 and model_trained) or st.session_state.demo_mode:
+    # ── Compact status strip ─────────────────────────────────────────────
     try:
         n_scored = dm.con.execute("SELECT COUNT(*) FROM risk_scores").fetchone()[0]
         n_high   = dm.con.execute("SELECT COUNT(*) FROM risk_scores WHERE risk_label='HIGH'").fetchone()[0]
     except Exception:
         n_scored = n_high = 0
 
+    mode_badge = (
+        "<span style='color:#00c853; font-weight:700;'>DEMO MODE</span> &nbsp;·&nbsp;"
+        if st.session_state.demo_mode and n_tx == 0
+        else ""
+    )
     st.markdown(
         f"""
         <div style="background:#0d2137; border:1px solid #1565c0; border-radius:8px;
                     padding:10px 20px; color:#8b949e; font-size:0.83rem;
                     display:flex; align-items:center; gap:12px;">
-            🟢 &nbsp; <b style="color:{BLUE_ACCENT};">{n_tx:,}</b> transactions loaded &nbsp;·&nbsp;
+            🟢 &nbsp; {mode_badge}
+            <b style="color:{BLUE_ACCENT};">{n_tx:,}</b> transactions loaded &nbsp;·&nbsp;
             <b style="color:{BLUE_ACCENT};">{n_scored:,}</b> accounts scored &nbsp;·&nbsp;
             <b style="color:{RED};">{n_high:,}</b> flagged HIGH RISK &nbsp;·&nbsp;
             FLHR-MCL · Transformer + BiLSTM + GCN + HGNN
@@ -440,22 +502,24 @@ if n_tx > 0 and model_trained:
         if uploaded:
             raw_bytes_rt = uploaded.read()
             uploaded.seek(0)
-            df_prev = pd.read_csv(uploaded, nrows=5)
+            df_prev   = pd.read_csv(uploaded, nrows=5)
             n_rows_rt = sum(1 for _ in io.BytesIO(raw_bytes_rt)) - 1
             st.caption(f"{n_rows_rt:,} rows · {df_prev.shape[1]} columns")
-            if st.button("Retrain Model", key="retrain_btn"):
-                pb = st.progress(0)
+            if st.button("Analyze", key="retrain_btn"):
+                pb     = st.progress(0)
                 st_txt = st.empty()
                 try:
                     df_full = pd.read_csv(io.BytesIO(raw_bytes_rt))
                     _run_training_pipeline(df_full, pb, st_txt)
+                    st.session_state.demo_mode = False
                     st.cache_resource.clear()
-                    st.success("Retraining complete — check terminal for 80/20 accuracy metrics.")
+                    time.sleep(1.5)
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Training failed: {exc}")
+
 else:
-    # No dataset loaded yet — show the upload card prominently
+    # ── Upload card ──────────────────────────────────────────────────────
     st.markdown(
         f"<h3 style='color:{BLUE_ACCENT}; margin-bottom:4px;'>Upload Transaction Dataset</h3>",
         unsafe_allow_html=True,
@@ -484,6 +548,20 @@ else:
         )
 
     with col_up:
+        # ── Use Demo shortcut ────────────────────────────────────────────
+        if demo_ready:
+            demo_col, _ = st.columns([1, 2])
+            with demo_col:
+                if st.button("🎯  Use Demo", use_container_width=True, key="demo_btn"):
+                    st.session_state.demo_mode = True
+                    st.rerun()
+            st.markdown(
+                "<div style='text-align:center; color:#555c6a; font-size:0.8rem;"
+                " margin: 4px 0 10px 0;'>— or upload your own dataset below —</div>",
+                unsafe_allow_html=True,
+            )
+
+        # ── File uploader ────────────────────────────────────────────────
         uploaded = st.file_uploader(
             "Drop your transaction CSV here (up to 10 GB)",
             type=["csv"],
@@ -499,11 +577,9 @@ else:
                 df_preview = None
 
             if df_preview is not None:
-                # Count total rows without loading everything twice
-                import io
                 raw_bytes = uploaded.read()
                 uploaded.seek(0)
-                n_rows = sum(1 for _ in io.BytesIO(raw_bytes)) - 1  # subtract header
+                n_rows = sum(1 for _ in io.BytesIO(raw_bytes)) - 1
                 st.success(f"Loaded **{n_rows:,} rows** × **{df_preview.shape[1]} columns**", icon="✅")
 
                 fraud_col = next(
@@ -521,20 +597,13 @@ else:
                     st.dataframe(df_preview, use_container_width=True)
 
                 st.markdown("<br>", unsafe_allow_html=True)
-                if st.button("🚀  Train Model", use_container_width=True):
+                if st.button("⚡  Analyze", use_container_width=True, key="train_btn"):
                     pb     = st.progress(0)
                     st_txt = st.empty()
-                    t0     = time.time()
                     try:
                         df_full = pd.read_csv(io.BytesIO(raw_bytes))
                         _run_training_pipeline(df_full, pb, st_txt)
-                        elapsed = time.time() - t0
                         st.cache_resource.clear()
-                        st.success(
-                            f"Model trained in {elapsed / 60:.1f} min. "
-                            "Check your terminal for 80/20 accuracy stats.",
-                            icon="🎉",
-                        )
                         time.sleep(1.5)
                         st.rerun()
                     except Exception as exc:

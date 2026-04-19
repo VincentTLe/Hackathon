@@ -42,9 +42,11 @@ log = logging.getLogger(__name__)
 
 ARTIFACT_DIR  = "data/artifacts"
 PAYSIM_CSV    = PAYSIM_PATH          # data/paysim.csv
-MAX_ROWS      = 150_000              # rows from PaySim for clique + feature building
-TRAIN_ACCTS   = 3_000               # accounts fed to GCN/HGNN (memory constraint)
-SCORE_ACCTS   = 10_000              # accounts to score and write to DuckDB
+MAX_ROWS      = 60_000               # rows from PaySim — fast demo pre-training
+TRAIN_ACCTS   = 2_000               # accounts fed to GCN/HGNN
+SCORE_ACCTS   = 6_000               # accounts to score and write to DuckDB
+MAX_RING_SIZE = 20                  # cap Strategy-B smurfing rings (merchants with 500+
+                                    # senders are not fraud rings, just popular merchants)
 EPOCHS        = 30                  # contrastive pre-training epochs (fast for demo)
 WINDOW_HOURS  = 24
 
@@ -126,11 +128,11 @@ def build_cliques(dm: DataManager, tx_df: pd.DataFrame) -> dict[str, list[list[s
                         total_cliques += 1
 
         # --- Strategy B: shared-destination grouping (smurfing pattern) ---
-        # Group C-accounts (not merchants) by destination within this window
+        # Cap ring size: a merchant with 500 senders is popular, not a fraud ring
         c_txs = win_df[win_df["account_from"].str.startswith("C")]
         for dest, grp in c_txs.groupby("account_to"):
             sources = list(grp["account_from"].unique())
-            if len(sources) >= 2:  # ≥2 senders → same destination = ring
+            if 2 <= len(sources) <= MAX_RING_SIZE:
                 ring = sources + [dest]
                 for acct in ring:
                     cliques_by_account.setdefault(acct, [])
@@ -227,39 +229,43 @@ def main() -> None:
     clique_accounts = list(cliques_by_account.keys())
     all_accounts = list(set(tx_df["account_from"].tolist() + tx_df["account_to"].tolist()))
 
-    # Build training set: fraud + clique + random sample, capped
-    priority = list(dict.fromkeys(fraud_accounts + clique_accounts))
-    remaining = [a for a in all_accounts if a not in set(priority)]
+    # Build balanced training set: up to half fraud, rest normal
     np.random.seed(42)
-    np.random.shuffle(remaining)
-    train_accounts = (priority + remaining)[:TRAIN_ACCTS]
-    log.info("Training on %d accounts (%d fraud, %d in cliques)",
-             len(train_accounts), len(fraud_accounts), len(clique_accounts))
+    n_fraud = min(len(fraud_accounts), TRAIN_ACCTS // 2)
+    fraud_sample = list(np.random.choice(fraud_accounts, n_fraud, replace=False))
+    fraud_sample_set = set(fraud_sample)
+    n_normal = TRAIN_ACCTS - n_fraud
+    normal_candidates = [a for a in all_accounts if a not in fraud_sample_set]
+    np.random.shuffle(normal_candidates)
+    normal_sample = normal_candidates[:n_normal]
+    train_accounts = fraud_sample + normal_sample
+    np.random.shuffle(train_accounts)
+    log.info("Training on %d accounts (%d fraud, %d normal)",
+             len(train_accounts), n_fraud, len(normal_sample))
+
+    # Precompute fraud set (avoids per-account DataFrame scan)
+    fraud_set = set(tx_df.loc[tx_df["is_fraud"], "account_from"].unique()) | \
+                set(tx_df.loc[tx_df["is_fraud"], "account_to"].unique())
+
+    log.info("  Batch-fetching features for %d accounts…", len(train_accounts))
+    bundles = dm.build_node_features_batch(train_accounts)
 
     stat_rows, temp_rows, tx_counts, labels = [], [], [], []
-    for i, aid in enumerate(train_accounts):
-        if i % 500 == 0:
-            log.info("  Building features %d/%d…", i, len(train_accounts))
-        bundle = dm.build_node_features(aid)
-        stat_vec = np.array(
-            [bundle["stat_features"].get(f, 0.0) for f in _STAT_FEATURE_NAMES],
-            dtype=np.float32,
-        )
-        stat_rows.append(stat_vec)
-        temp_rows.append(bundle["temporal_seq"])
-        tx_counts.append(bundle["tx_count"])
-        is_fraud = tx_df[
-            (tx_df["account_from"] == aid) | (tx_df["account_to"] == aid)
-        ]["is_fraud"].any()
-        labels.append(int(is_fraud))
+    for aid in train_accounts:
+        b = bundles[aid]
+        stat_rows.append(np.array(
+            [b["stat_features"].get(f, 0.0) for f in _STAT_FEATURE_NAMES], dtype=np.float32
+        ))
+        temp_rows.append(b["temporal_seq"])
+        tx_counts.append(b["tx_count"])
+        labels.append(int(aid in fraud_set))
 
     stat_matrix   = np.vstack(stat_rows)
     temporal_seqs = np.stack(temp_rows, axis=0)
     tx_count_arr  = np.array(tx_counts, dtype=np.float32)
     labels_arr    = np.array(labels, dtype=np.int32)
 
-    acct_cliques = [cliques_by_account.get(a, []) for a in train_accounts]
-    flat_cliques = [c for cs in acct_cliques for c in cs]
+    flat_cliques = [c for cs in [cliques_by_account.get(a, []) for a in train_accounts] for c in cs]
     log.info("Labels: %d fraud / %d normal", labels_arr.sum(), (labels_arr == 0).sum())
 
     # ------------------------------------------------------------------
@@ -288,40 +294,37 @@ def main() -> None:
     log.info("=== Step 5/5: Scoring accounts ===")
 
     # Score a broader set than just training accounts
-    score_candidates = list(dict.fromkeys(fraud_accounts + clique_accounts + remaining))
+    score_candidates = list(dict.fromkeys(fraud_accounts + clique_accounts + all_accounts))
     score_accounts = score_candidates[:SCORE_ACCTS]
     log.info("Scoring %d accounts…", len(score_accounts))
 
-    # Build features for scoring accounts
-    s_stat, s_temp, s_txc = [], [], []
-    valid_score_accounts = []
-    for aid in score_accounts:
-        try:
-            b = dm.build_node_features(aid)
-            s_stat.append(np.array(
-                [b["stat_features"].get(f, 0.0) for f in _STAT_FEATURE_NAMES],
-                dtype=np.float32,
-            ))
-            s_temp.append(b["temporal_seq"])
-            s_txc.append(b["tx_count"])
-            valid_score_accounts.append(aid)
-        except Exception:
-            continue
+    # Batch feature fetch for scoring (2 queries instead of 20 000+)
+    log.info("  Batch-fetching features for %d accounts…", len(score_accounts))
+    score_bundles = dm.build_node_features_batch(score_accounts)
+
+    valid_score_accounts = [a for a in score_accounts if score_bundles[a]["tx_count"] > 0]
+    s_stat = np.vstack([
+        np.array([score_bundles[a]["stat_features"].get(f, 0.0) for f in _STAT_FEATURE_NAMES],
+                 dtype=np.float32)
+        for a in valid_score_accounts
+    ])
+    s_temp = np.stack([score_bundles[a]["temporal_seq"] for a in valid_score_accounts], axis=0)
+    s_txc  = np.array([score_bundles[a]["tx_count"] for a in valid_score_accounts], dtype=np.float32)
 
     scores = pipeline.predict(
         account_ids=valid_score_accounts,
-        stat_matrix=np.vstack(s_stat),
-        temporal_seqs=np.stack(s_temp, axis=0),
-        tx_counts=np.array(s_txc, dtype=np.float32),
+        stat_matrix=s_stat,
+        temporal_seqs=s_temp,
+        tx_counts=s_txc,
         tx_df=tx_df,
         cliques=flat_cliques,
     )
 
+    stat_for_flags = dm.build_stat_features_batch(valid_score_accounts)
     for aid, score in zip(valid_score_accounts, scores):
-        monthly = dm.get_monthly_activity(aid)
+        monthly   = dm.get_monthly_activity(aid)
         acct_clqs = cliques_by_account.get(aid, [])
-        b = dm.build_node_features(aid)
-        flags = generate_flags(aid, float(score), b["stat_features"], acct_clqs, monthly)
+        flags     = generate_flags(aid, float(score), stat_for_flags.get(aid, {}), acct_clqs, monthly)
         dm.write_risk_score(aid, float(score), flags)
 
     n_scored = dm.con.execute("SELECT COUNT(*) FROM risk_scores").fetchone()[0]
