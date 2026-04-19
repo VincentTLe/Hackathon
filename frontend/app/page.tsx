@@ -114,6 +114,15 @@ export default function Home() {
         <header className="text-center space-y-1">
           <h1 className="text-4xl font-semibold text-tan-900 tracking-tight">Bridge</h1>
           <p className="text-tan-700 text-sm italic">They love you. Just not in your language.</p>
+          <div className="flex gap-2 justify-center pt-3">
+            <a href="/onboard" className="px-4 py-2 rounded-lg bg-tan-900 text-tan-50 text-sm font-medium hover:opacity-90">
+              Start a real conversation →
+            </a>
+            <a href="/connections" className="px-4 py-2 rounded-lg border-2 border-tan-300 text-tan-900 text-sm font-medium hover:bg-tan-100">
+              My connections
+            </a>
+          </div>
+          <p className="text-tan-600 text-xs pt-1">Invited? Open the link they sent you.</p>
         </header>
 
         {step === 'intro' && (
