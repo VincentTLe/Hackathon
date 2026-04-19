@@ -1,0 +1,12 @@
+streamlit>=1.35.0
+torch>=2.1.0
+# lightgbm>=4.3.0  # requires: brew install libomp  (macOS)
+duckdb>=0.10.0
+pandas>=2.1.0
+numpy>=1.26.0
+plotly>=5.20.0
+pyvis>=0.3.2
+pybind11>=2.11.0
+scikit-learn>=1.4.0
+joblib>=1.3.0
+requests>=2.31.0

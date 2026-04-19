@@ -1,0 +1,9 @@
+[server]
+maxUploadSize = 10000   # 10 GB — effectively unlimited for any realistic banking dataset
+
+[theme]
+base = "dark"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1c1f26"
+primaryColor = "#4fc3f7"
+textColor = "#e0e0e0"
