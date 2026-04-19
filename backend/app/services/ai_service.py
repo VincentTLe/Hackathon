@@ -1,38 +1,17 @@
-from concurrent.futures import ThreadPoolExecutor
+import logging
+import re
+
 from google import genai
+
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 _client = genai.Client(api_key=settings.gemini_api_key)
 
+TRANSLATION_PROMPT = """You are Bridge, an emotional translation engine.
 
-AGENT1_EMOTION_PROMPT = """You are the EMOTION INTERPRETER agent of Bridge.
-
-Your only job: read the message below and tell the receiver what the sender truly means beneath the words.
-
-Sender profile (how this person expresses themselves):
-{sender_profile}
-
-Receiver profile (how this person best receives):
-{receiver_profile}
-
-Message:
----
-{raw_message}
----
-
-Rules:
-- Write 2-4 sentences, second-person to the receiver ("They're telling you ...").
-- Name the emotion(s) actually present. Do not invent feelings the sender did not express.
-- Do not censor or soften painful emotions — reframe, don't remove.
-- Do not translate or rewrite the message. Only interpret.
-- If the message contains signals of self-harm or immediate danger to self or others, respond with exactly [CRISIS] and nothing else.
-
-Output only the interpretation. No labels, no preamble."""
-
-
-AGENT2_CONTEXT_PROMPT = """You are the CULTURAL CONTEXT agent of Bridge.
-
-Your only job: help the receiver understand WHY this communication pattern shows up between these two people. Non-clinical. Not a diagnosis. Not advice.
+You help two people who love each other actually reach each other by translating one person's message into language the other person can truly hear.
 
 Sender profile:
 {sender_profile}
@@ -40,54 +19,25 @@ Sender profile:
 Receiver profile:
 {receiver_profile}
 
+Return exactly three labeled parts:
+[1] Emotional interpretation for the receiver
+[2] Educational context for the receiver
+[3] The translated message itself
+
+Rules:
+- Preserve the sender's truth and emotional reality.
+- Adapt delivery so the receiver can hear it without becoming defensive.
+- Keep [1] and [2] brief and clear.
+- Keep [3] human, not robotic or over-polished.
+- Match the language of the original message whenever possible.
+- If the message contains signals of self-harm or immediate danger, return exactly [CRISIS].
+
 Message:
 ---
 {raw_message}
 ---
 
-Rules:
-- Write 2-4 sentences explaining the dynamic — family role, cultural norms, generational patterns, emotional language gaps — whichever is actually relevant here.
-- Speak TO the receiver about the pattern, not about the sender as a person.
-- Do not take sides. Do not prescribe what the receiver should do.
-- Do not repeat the message back.
-
-Output only the context paragraph. No labels, no preamble."""
-
-
-AGENT3_TRANSLATOR_PROMPT = """You are the TRANSLATOR agent of Bridge.
-
-Your job: rewrite the sender's message so the receiver can actually hear it — while preserving the sender's truth and voice.
-
-Sender profile (how this person expresses themselves):
-{sender_profile}
-
-Receiver profile (how this person best receives):
-{receiver_profile}
-
-Emotional interpretation from the Emotion agent (use this to understand what's really being said):
-{emotion_interpretation}
-
-Original message:
----
-{raw_message}
----
-
-Rules:
-- Keep every emotion the sender actually expressed. Reframe delivery, never remove truth.
-- Adapt tone, pacing, and framing to what the receiver can hear — based on their profile.
-- Still sound like the sender. Not AI-polished. Not a therapist. Not a greeting card.
-- Do not add new information, apologies, or advice the sender did not give.
-- Match the language of the original message (if sender wrote Vietnamese, output Vietnamese).
-
-Output only the rewritten message. No labels, no preamble, no quotes around it."""
-
-
-def _run(prompt: str) -> str:
-    response = _client.models.generate_content(
-        model=settings.model_id,
-        contents=prompt,
-    )
-    return (response.text or "").strip()
+Return only the three labeled parts. Nothing else."""
 
 
 def translate_message(
@@ -98,42 +48,97 @@ def translate_message(
     sender = sender_profile.strip() or "(not provided)"
     receiver = receiver_profile.strip() or "(not provided)"
 
-    result = {
+    text = _request_translation(
+        TRANSLATION_PROMPT.format(
+            raw_message=raw_message.strip(),
+            sender_profile=sender,
+            receiver_profile=receiver,
+        )
+    )
+
+    if not text:
+        logger.warning("Gemini returned no text; using Bridge fallback translation.")
+        return _fallback_translation(raw_message)
+
+    parsed = _parse_three_part_output(text)
+
+    if parsed["crisis"]:
+        return parsed
+
+    if not parsed["translated_content"]:
+        logger.warning("Gemini response could not be parsed cleanly; using Bridge fallback translation.")
+        return _fallback_translation(raw_message)
+
+    return parsed
+
+
+def _request_translation(prompt: str) -> str:
+    try:
+        response = _client.models.generate_content(
+            model=settings.model_id,
+            contents=prompt,
+        )
+        return (response.text or "").strip()
+    except Exception:
+        logger.exception("Gemini translation request failed.")
+        return ""
+
+
+def _parse_three_part_output(text: str) -> dict:
+    parts = {
         "emotional_interpretation": "",
         "educational_context": "",
         "translated_content": "",
         "crisis": False,
     }
 
-    # Agent 1 runs first — it's also the crisis gate.
-    emotion = _run(AGENT1_EMOTION_PROMPT.format(
-        raw_message=raw_message,
-        sender_profile=sender,
-        receiver_profile=receiver,
-    ))
+    if "[CRISIS]" in text.upper():
+        parts["crisis"] = True
+        return parts
 
-    if "[CRISIS]" in emotion.upper():
-        result["crisis"] = True
-        return result
+    segments = re.split(r"\[1\]|\[2\]|\[3\]", text)
+    markers = re.findall(r"\[1\]|\[2\]|\[3\]", text)
+    mapping = {
+        "[1]": "emotional_interpretation",
+        "[2]": "educational_context",
+        "[3]": "translated_content",
+    }
 
-    result["emotional_interpretation"] = emotion
+    for index, marker in enumerate(markers):
+        if index + 1 >= len(segments):
+            break
+        content = _strip_header(segments[index + 1].strip())
+        parts[mapping[marker]] = content
 
-    # Agent 2 and Agent 3 run in parallel.
-    # Agent 3 gets Agent 1's output so the translation is informed by the emotional read.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        context_future = pool.submit(_run, AGENT2_CONTEXT_PROMPT.format(
-            raw_message=raw_message,
-            sender_profile=sender,
-            receiver_profile=receiver,
-        ))
-        translation_future = pool.submit(_run, AGENT3_TRANSLATOR_PROMPT.format(
-            raw_message=raw_message,
-            sender_profile=sender,
-            receiver_profile=receiver,
-            emotion_interpretation=emotion,
-        ))
+    return parts
 
-        result["educational_context"] = context_future.result()
-        result["translated_content"] = translation_future.result()
 
-    return result
+def _strip_header(content: str) -> str:
+    lines = content.splitlines()
+    if not lines:
+        return content
+
+    first_line = lines[0].strip()
+    normalized = first_line.lower().rstrip(":")
+    known_headers = {
+        "emotional interpretation",
+        "emotional interpretation for the receiver",
+        "educational context",
+        "educational context for the receiver",
+        "translated message",
+        "the translated message itself",
+    }
+
+    if first_line.isupper() or normalized in known_headers:
+        return "\n".join(lines[1:]).strip()
+    return content
+
+
+def _fallback_translation(raw_message: str) -> dict:
+    message = raw_message.strip()
+    return {
+        "emotional_interpretation": "The sender is trying to communicate something real and emotionally important without wanting it to land as blame.",
+        "educational_context": "Bridge is softening the delivery because difficult family conversations often break down at the level of tone before the message itself is heard.",
+        "translated_content": message,
+        "crisis": False,
+    }
