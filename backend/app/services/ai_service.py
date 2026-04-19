@@ -1,43 +1,93 @@
-import re
+from concurrent.futures import ThreadPoolExecutor
 from google import genai
 from app.config import settings
 
 _client = genai.Client(api_key=settings.gemini_api_key)
 
-TRANSLATION_PROMPT = """You are Bridge, an emotional translation engine. Your role is to help two people who love each other actually reach each other — by translating one person's message so the other can truly hear it.
 
-Relationship type: parent_child
+AGENT1_EMOTION_PROMPT = """You are the EMOTION INTERPRETER agent of Bridge.
+
+Your only job: read the message below and tell the receiver what the sender truly means beneath the words.
 
 Sender profile (how this person expresses themselves):
 {sender_profile}
 
-Receiver profile (how this person best receives emotional messages):
+Receiver profile (how this person best receives):
 {receiver_profile}
 
-You must produce exactly three parts, labeled [1], [2], [3]:
-
-[1] EMOTIONAL INTERPRETATION — what the sender truly means beneath the words
-(1-3 sentences, written for the receiver in second-person empathetic tone, e.g. "They're telling you ...")
-
-[2] EDUCATIONAL CONTEXT — why this communication pattern exists in this relationship
-(1-3 sentences, non-clinical, helps the receiver understand the dynamic — not a diagnosis)
-
-[3] TRANSLATED MESSAGE — the message adapted for the receiver
-(preserves sender's truth, adapts delivery to receiver's profile, still sounds like it could come from the sender — not AI-polished)
-
-Rules:
-- Never add emotions the sender did not express
-- Never remove or censor emotions the sender did express — reframe instead
-- Never take sides or add your own opinion on the relationship
-- Keep [1] and [2] brief — [3] is the primary deliverable
-- If the message contains crisis signals (self-harm, immediate danger to self or others), respond with [CRISIS] only — nothing else
-
-Message to translate:
+Message:
 ---
 {raw_message}
 ---
 
-Return all three parts labeled [1], [2], [3]. Nothing else."""
+Rules:
+- Write 2-4 sentences, second-person to the receiver ("They're telling you ...").
+- Name the emotion(s) actually present. Do not invent feelings the sender did not express.
+- Do not censor or soften painful emotions — reframe, don't remove.
+- Do not translate or rewrite the message. Only interpret.
+- If the message contains signals of self-harm or immediate danger to self or others, respond with exactly [CRISIS] and nothing else.
+
+Output only the interpretation. No labels, no preamble."""
+
+
+AGENT2_CONTEXT_PROMPT = """You are the CULTURAL CONTEXT agent of Bridge.
+
+Your only job: help the receiver understand WHY this communication pattern shows up between these two people. Non-clinical. Not a diagnosis. Not advice.
+
+Sender profile:
+{sender_profile}
+
+Receiver profile:
+{receiver_profile}
+
+Message:
+---
+{raw_message}
+---
+
+Rules:
+- Write 2-4 sentences explaining the dynamic — family role, cultural norms, generational patterns, emotional language gaps — whichever is actually relevant here.
+- Speak TO the receiver about the pattern, not about the sender as a person.
+- Do not take sides. Do not prescribe what the receiver should do.
+- Do not repeat the message back.
+
+Output only the context paragraph. No labels, no preamble."""
+
+
+AGENT3_TRANSLATOR_PROMPT = """You are the TRANSLATOR agent of Bridge.
+
+Your job: rewrite the sender's message so the receiver can actually hear it — while preserving the sender's truth and voice.
+
+Sender profile (how this person expresses themselves):
+{sender_profile}
+
+Receiver profile (how this person best receives):
+{receiver_profile}
+
+Emotional interpretation from the Emotion agent (use this to understand what's really being said):
+{emotion_interpretation}
+
+Original message:
+---
+{raw_message}
+---
+
+Rules:
+- Keep every emotion the sender actually expressed. Reframe delivery, never remove truth.
+- Adapt tone, pacing, and framing to what the receiver can hear — based on their profile.
+- Still sound like the sender. Not AI-polished. Not a therapist. Not a greeting card.
+- Do not add new information, apologies, or advice the sender did not give.
+- Match the language of the original message (if sender wrote Vietnamese, output Vietnamese).
+
+Output only the rewritten message. No labels, no preamble, no quotes around it."""
+
+
+def _run(prompt: str) -> str:
+    response = _client.models.generate_content(
+        model=settings.model_id,
+        contents=prompt,
+    )
+    return (response.text or "").strip()
 
 
 def translate_message(
@@ -45,47 +95,45 @@ def translate_message(
     sender_profile: str = "",
     receiver_profile: str = "",
 ) -> dict:
-    prompt = TRANSLATION_PROMPT.format(
-        raw_message=raw_message,
-        sender_profile=sender_profile.strip() or "(not provided)",
-        receiver_profile=receiver_profile.strip() or "(not provided)",
-    )
-    response = _client.models.generate_content(
-        model=settings.model_id,
-        contents=prompt,
-    )
-    return _parse_three_part_output(response.text)
+    sender = sender_profile.strip() or "(not provided)"
+    receiver = receiver_profile.strip() or "(not provided)"
 
-
-def _parse_three_part_output(text: str) -> dict:
-    parts = {
+    result = {
         "emotional_interpretation": "",
         "educational_context": "",
         "translated_content": "",
         "crisis": False,
     }
 
-    if "[CRISIS]" in text:
-        parts["crisis"] = True
-        return parts
+    # Agent 1 runs first — it's also the crisis gate.
+    emotion = _run(AGENT1_EMOTION_PROMPT.format(
+        raw_message=raw_message,
+        sender_profile=sender,
+        receiver_profile=receiver,
+    ))
 
-    segments = re.split(r'\[1\]|\[2\]|\[3\]', text)
-    markers = re.findall(r'\[1\]|\[2\]|\[3\]', text)
+    if "[CRISIS]" in emotion.upper():
+        result["crisis"] = True
+        return result
 
-    mapping = {
-        "[1]": "emotional_interpretation",
-        "[2]": "educational_context",
-        "[3]": "translated_content",
-    }
+    result["emotional_interpretation"] = emotion
 
-    for i, marker in enumerate(markers):
-        if i + 1 >= len(segments):
-            break
-        content = segments[i + 1].strip()
-        # Drop an all-caps header line (e.g. "EMOTIONAL INTERPRETATION")
-        lines = content.split("\n")
-        if lines and lines[0].strip().isupper():
-            content = "\n".join(lines[1:]).strip()
-        parts[mapping[marker]] = content
+    # Agent 2 and Agent 3 run in parallel.
+    # Agent 3 gets Agent 1's output so the translation is informed by the emotional read.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        context_future = pool.submit(_run, AGENT2_CONTEXT_PROMPT.format(
+            raw_message=raw_message,
+            sender_profile=sender,
+            receiver_profile=receiver,
+        ))
+        translation_future = pool.submit(_run, AGENT3_TRANSLATOR_PROMPT.format(
+            raw_message=raw_message,
+            sender_profile=sender,
+            receiver_profile=receiver,
+            emotion_interpretation=emotion,
+        ))
 
-    return parts
+        result["educational_context"] = context_future.result()
+        result["translated_content"] = translation_future.result()
+
+    return result
